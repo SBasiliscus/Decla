@@ -1,147 +1,133 @@
 defmodule Nhf1 do
   @moduledoc """
-  Számtekercs
-  @author "Egyetemi Hallgató <egy.hallg@edu.bme.hu>"
-  @date   "2025-10-24"
+  Number Spiral
+  @author "Szabó András <andras.szabo.sb@gmail.com>"
+  @date   "2025-10-25"
   ...
   """
-      @type size()  :: integer() # tábla mérete (0 < n)
-      @type cycle() :: integer() # ciklus hossza (0 < m <= n)
-      @type value() :: integer() # mező értéke (0 < v <= m)
+  @type size()  :: integer() # size of the board (0 < n)
+  @type cycle() :: integer() # cycle length (0 < m <= n)
+  @type value() :: integer() # value of the field (0 < v <= m)
+  
+  @type row()   :: integer()       # row number (from 1 to n)
+  @type col()   :: integer()       # column number (from 1 to n)
+  @type field() :: {row(), col()}  # field coordinates
 
-      @type row()   :: integer()       # sor száma (1-től n-ig)
-      @type col()   :: integer()       # oszlop száma (1-től n-ig)
-      @type field() :: {row(), col()}  # mező koordinátái
+  @type field_value() :: {field(), value()}                 # field and its value
+  @type puzzle_desc() :: {size(), cycle(), [field_value()]} # puzzle description
 
-      @type field_value() :: {field(), value()}                 # mező és értéke
-      @type puzzle_desc() :: {size(), cycle(), [field_value()]} # feladvány
+  @type retval()    :: integer()    # result field value (0 <= rv <= m)
+  @type solution()  :: [[retval()]] # a solution
+  @type solutions() :: [solution()] # all solutions
 
-      @type retval()    :: integer()    # eredménymező értéke (0 <= rv <= m)
-      @type solution()  :: [[retval()]] # egy megoldás
-      @type solutions() :: [solution()] # összes megoldás
-
-      @spec helix(sd::puzzle_desc()) :: ss::solutions()
-      # ss az sd feladványleíróval megadott feladvány összes megoldásának listája
-      def helix({size,cycle,fields}) do
-        #felépítem a field_list listát, amely egy lista a {rown, column} értékekkel,
-        #  mely tekeredő bejárás szerinti sorban megadja a sor és oszlop értékekek
-        #és ennek az úgymond inverzét, azaz egy koordináta -> index map-et
-        {field_list,field_to_index_map} = field_list_and_map_builder(size,1,[])
-        #felépítek egy m hosszú prímszámokat tartalmazó tömböt
-        primes = prime_array_builder(cycle)
-        
-        #felépítem a conditions tömböt
-        conditions = conditions_array_builder(size,fields,primes)
-
-        
-        #a nullás megkötések kivételével szekciókra bontom a tekeredő bejárást a megkötések mentén,
-        #majd a szekciók lehetséges nulla elosztását megkapom 
-        #elősször kigyűjtöm a nullás megkötések indexeit:
-
-        #a megkötéseket átalakítom koordináták helyett index alapuakká
-        const_with_index_sorted =
-          fields
-          |> Enum.map(fn {{row, col}, value} ->
-            {Map.get(field_to_index_map, {row, col}), value}
-          end)
-          |> Enum.sort_by(fn {indx, _val} -> indx end)
-        
-        #elősször a nullás megkötéseknek eltárolom (és rendezem biztos ami biztos) a pozíciójukat
-        
-        zeros_const_positions = Enum.sort(
-          for {a, b} <- const_with_index_sorted, b === 0, do: a-1
-        )
-      
-        #a megkötésekből összegyűjtöm a nem nullás megkötéseiket, 
-        #       és csökkentem az indexeiket annyival amennyi nullás mgekötés lett volna előtte
-        constraints_without_zeros = 
-        const_with_index_sorted
-        #sorbarendezett megkötéseken végig megyek egy kételemű aksival, 
-        #egyikbe gyűjtöm a nem nullás megkötéseket, másikba tárolom az aktuális eltolás mértékét
-        |> Enum.reduce({[],0}, fn {index,val},{acc,shift} ->
-          if val === 0 do
-            {acc, shift+1}
-          else
-            {[{index-shift,val}|acc],shift}
-          end
-            
-          end)
-        |> elem(0)
-        |>Enum.reverse()
-        
+  
+  @spec helix(sd::puzzle_desc()) :: ss::solutions()
+  # ss is the list of all solutions for the puzzle given by the puzzle description sd
+  def helix({size,cycle,fields}) do 
     
-        #kiszámolom minden szekcióra a minimum nullások számát és a maximumét (vagyis pontosabban azt a maximális x értéket, amire a szekcióba beleférhet min+x*m nullás)
-        minmaxes = min_max_distribution(0,cycle,cycle,size*size-length(zeros_const_positions),constraints_without_zeros)
-        #végig megyek hogy hényfélekéépen szórhatom szét a nullásokat a szekciók között
-        poss_distributions = 
-        possible_zeros_distribution_recursive(
-              Enum.map(minmaxes,fn {_a,b} -> b end),
-              div(size*size-size*cycle-Enum.reduce(minmaxes,0,fn {a,_}, acc -> acc + a end),cycle),cycle,
-              Enum.map(minmaxes,fn {a,_b} -> a end))
-        #IO.inspect(poss_distributions)
-        #megoldhatatlan esetben üres listát adok vissza
-        if poss_distributions == [-1] do
-          []
+    # build the field_list, which is a list of {row, column} values,
+    # giving the row and column values in the order of a spiral traversal
+    # and a map, field ({row, column}) => index in the flattened order  
+    {field_list,field_to_index_map} = field_list_and_map_builder(size,1,[])
+    
+    # build an array of length m containing prime numbers
+    primes = prime_array_builder(cycle)
+        
+    # build the conditions array, from which we can read (method described in the function doc):
+    #  - values present in every row and every column
+    #  - number of zeros present in every row and every column
+    conditions = conditions_array_builder(size,fields,primes)        
+
+    # convert the constraints from coordinate-based to index-based, and sort them accordingly 
+    const_with_index_sorted =
+      fields
+      |> Enum.map(fn {{row, col}, value} ->
+        {Map.get(field_to_index_map, {row, col}), value}
+      end)
+      |> Enum.sort_by(fn {indx, _val} -> indx end)
+
+    # count the zero constraints:
+    zero_consts_counts = Enum.count(const_with_index_sorted, fn {_, v} -> v === 0 end)
+    
+    # collect the non-zero constraints from the constraints, 
+    # and decrease their indices by the number of zero constraints that would have preceded them
+    constraints_without_zeros = 
+      const_with_index_sorted
+    # iterate through the sorted constraints with a two-element accumulator, 
+    # storing non-zero constraints in one, and the current shift amount in the other
+      |> Enum.reduce({[],0}, fn {index,val},{acc,shift} ->
+        if val === 0 do
+          {acc, shift+1}
         else
-              # a lehetséges 0 eloszlások listák listáját tovább adom az összegyűjtú metódusnak de kilapítva gyűjtöm ezeket össze
-          Enum.flat_map(poss_distributions,
-            fn one_zero_dist -> 
-              #egy konkrét nulla elosztásra vizsgálom a lehetséges megoldásokat
-
-              helix_rec_builder(cycle,1,field_list,conditions,primes,one_zero_dist,0,cycle,size,const_with_index_sorted++[{size*size+1,1}],field_to_index_map,[])
-
-            end
-            )
-          
+          {[{index-shift,val}|acc],shift}
         end
-      end
+              
+        end)
+      |> elem(0)
+      |>Enum.reverse()
 
+    # calculate the minimum and maximum number of zeros for each section 
+    # (more precisely, the max value of x for which the section can fit min+x*m zeros)
+    minmaxes = min_max_distribution(0,cycle,cycle,size*size-zero_consts_counts,constraints_without_zeros)
 
+    # iterate through the ways to distribute the zeros among the sections
+    poss_distributions = 
+    possible_zeros_distribution_recursive(
+          Enum.map(minmaxes,fn {_a,b} -> b end), # max zeros that can be placed in sections (*cycle)
+          div(size*size-size*cycle-zero_consts_counts-Enum.reduce(minmaxes,0,fn {a,_}, acc -> acc + a end),cycle), #
+          cycle,
+          Enum.map(minmaxes,fn {a,_b} -> a end)) # min zeros to be placed in sections
+    
+    # return an empty list in case it's unsolvable
+      if poss_distributions == [-1] do
+        []
+      else
+          # pass the list of lists of possible 0 distributions to the collector method, but collect them flattened
+      Enum.flat_map(poss_distributions,
+        fn one_zero_dist -> 
+          # examine the possible solutions for a specific zero distribution
 
+          helix_rec_builder(cycle,1,field_list,conditions,primes,one_zero_dist,0,cycle,size,const_with_index_sorted++[{size*size+1,1}],field_to_index_map,[])
 
-
-
-@spec possible_zeros_distribution_recursive(list::[integer()],z::integer(),m::cycle(),tied::[integer()])::[[integer()]]
-  # segétmetódus ami megkapja a list listában hogy melyik szekcióban maximum hányszor m-nyi nullás fér el
-  #  és a számmal hogy összesen hányszor m nullásnak van szabad mozgási helye (értsd. nincs fixen egy szekcióba kényszerítve)
-  # visszatért a különböző jó 0 elosztásokkal
-  def possible_zeros_distribution_recursive([akt|[_sm|_sms]=rest],z,m,[akt_tied|rest_tied]) do 
-    if Enum.sum([akt|rest])<z or Enum.any?([akt_tied|rest_tied]++[akt|rest], fn x -> x < 0 end) do
-      #az az eset, amikor nem lehet elosztani a nullásokat
-      #  vagy mert nincs elég
-      #  vagy mert egy szekcióba negatív számu minimum nullás kell (vagyis nincs elég cella hogy a szekció előtti utolsó elemből novekvő sorrendbe elérjen a szekció utáni első elemhez)
+        end
+        )
+          
+    end
+  end
+  
+  @spec possible_zeros_distribution_recursive(list::[integer()],free_zeros::integer(),cycle::cycle(),tied::[integer()])::[[integer()]]
+  # helper method that receives in a list how many times m-zeros can maximally fit in each section
+  # and a number showing how many times m zeros have free space to move overall (i.e., not fixedly forced into one section)
+  # returns the different valid 0 distributions
+  # free_zeros: there are in total free_zeros*cycle freely movable zeros
+  # tied: list giving the minimum number of zeros to be placed in the different sections
+  defp possible_zeros_distribution_recursive([akt|[_sm|_sms]=rest],free_zeros,cycle,[akt_tied|rest_tied]) do 
+    if Enum.sum([akt|rest])<free_zeros or Enum.any?([akt_tied|rest_tied]++[akt|rest], fn x -> x < 0 end) do
+      # the case when zeros cannot be distributed
+      #  either because there aren't enough
+      #  or because a negative number of minimum zeros is needed in a section (i.e., not enough cells to reach from the last element before the section in ascending order to the first element after the section)
       [-1]
     else
-      ##nem kéne, de a warningok miatt lecsekkolom
-      starting_x = max(0, z - Enum.sum(rest))
-      ending_x = min(akt, z)
+      starting_x = max(0, free_zeros - Enum.sum(rest))
+      ending_x = min(akt, free_zeros)
       if ending_x>=starting_x do
-        #Stream.flat_map(starting_x..ending_x, fn x ->
-        #  possible_zeros_distribution_recursive(rest, z - x, m, rest_tied)
-        #  |> Stream.map(fn rest_made -> [x*m + akt_tied | rest_made] end)
-        #end)
         for x <- starting_x..ending_x,
-          rest_made <- possible_zeros_distribution_recursive(rest,z-x,m,rest_tied) do
-          [x*m+akt_tied|rest_made]
+          rest_made <- possible_zeros_distribution_recursive(rest,free_zeros-x,cycle,rest_tied) do
+          [x*cycle+akt_tied|rest_made]
         end
       else
         []
       end
-      
-      #for x <- max(0,z-Enum.sum(rest))..min(akt,z),
-      #  rest_made <- possible_zeros_distribution_recursive(rest,z-x,m,rest_tied) do
-      #  [x*m+akt_tied|rest_made]
-      #end
     end
   end  
-  def possible_zeros_distribution_recursive([_akt|[]],z,m,[akt_tied|_r]), do: [[z*m+akt_tied]]
+  defp possible_zeros_distribution_recursive([_akt|[]],free_zeros,cycle,[akt_tied|_r]), do: [[free_zeros*cycle+akt_tied]]
 
   
-@spec min_max_distribution(ij::integer(),j::value(),m::cycle(),len::size(),constraints::[{integer(),value()}])::{min::integer(),max::integer()}
-  #minden szekcióra visszaad a a minimális zero és maxi szám párost {min,max}
-  # min = legkevesebb kötelező nullás a szekcióban
-  # max = max(x) : min+m*x db nullás elhelyezhető a szekcióban
-  def min_max_distribution(ij,j,m,len,[{ik,k}|constraints]) do
+  @spec min_max_distribution(ij::integer(),j::value(),m::cycle(),len::size(),constraints::[{integer(),value()}])::{min::integer(),max::integer()}
+  # returns the minimum zero and maximum number pair {min,max} for every section
+  # min = least compulsory zeros in the section
+  # max = max(x) : min+m*x zeros can be placed in the section
+  defp min_max_distribution(ij,j,m,len,[{ik,k}|constraints]) do
     sect_len = ik-ij-1
     [
       
@@ -159,7 +145,7 @@ defmodule Nhf1 do
         ] ++ min_max_distribution(ik,k,m,len,constraints)
   end
   
-  def min_max_distribution(ij,j,m,len,[]) do
+  defp min_max_distribution(ij,j,m,len,[]) do
     sect_len = len+1-ij-1
     [
       
@@ -172,39 +158,45 @@ defmodule Nhf1 do
   
   
 
-
   
   
-@spec helix_rec_builder(last_value::value(),index::integer(),fields::[field()], conditions:: :array.array(), primes:: :array.array(), sect_zeros_numbers::[integer()],zeros_already_this_section::integer(),cycle::cycle(), size::size(),consts::[{integer(),value()}],map::%{},acc::[value()])::[value()]
+  @spec helix_rec_builder(last_value::value(),index::integer(),fields::[field()], conditions:: :array.array(), primes:: :array.array(), sect_zeros_numbers::[integer()],zeros_already_this_section::integer(),cycle::cycle(), size::size(),consts::[{integer(),value()}],map::%{},acc::[value()])::[value()]
   
   
-  # az az eset (mintailesztéssel) amikor az index a következő constraints, és annka értéke 0
-  def helix_rec_builder(last_value,i,[_field|rest_fields],conds,primes,sects_zeros,zeros_already,cycle,size,[{i,0}|rest_consts],map,acc) do
-    #leteszem a nullást és megyek tovább,szekció marad ugyanaz
+  # the case (via pattern matching) where the index is the next constraint, and its value is 0
+  defp helix_rec_builder(last_value,i,[_field|rest_fields],conds,primes,sects_zeros,zeros_already,cycle,size,[{i,0}|rest_consts],map,acc) do
+    # put down the zero and move on, section remains the same
     helix_rec_builder(last_value,i+1,rest_fields,conds,primes,sects_zeros,zeros_already,cycle,size,rest_consts,map,[0|acc])
   end
   
-  # az az eset (mintailesztéssel) amikor az index a következő constraints, és annka értéke NEM 0
-  def helix_rec_builder(_last_value,i,[_field|rest_fields],conds,primes,[_this_sect_zeros|rest_sects_zeros],_zeros_already,cycle,size,[{i,const_value}|rest_consts],map,acc) do
-    #leteszem az értéket, és átlépek a következő szekcióra
-    helix_rec_builder(const_value,i+1,rest_fields,conds,primes,rest_sects_zeros,0,cycle,size,rest_consts,map,[const_value|acc])     
+  # the case (via pattern matching) where the index is the next constraint, and its value is NOT 0
+  defp helix_rec_builder(_last_value,i,[_field|rest_fields],conds,primes,[_this_sect_zeros|rest_sects_zeros],_zeros_already,cycle,size,[{i,const_value}|rest_consts],map,acc) do
+    # put down the value and step to the next section
+    helix_rec_builder(const_value,i+1,rest_fields,conds,primes,rest_sects_zeros,0,cycle,size,rest_consts,map,[const_value|acc])   
+
   end
   
   
 
-  def helix_rec_builder(last_value,i,[{row,column}|rest_fields],conds,primes,[this_sect_zeros|_rest_sects_zeros]=sects_zeros,zeros_already,cycle,size,[{const_index,_const_value}|_rest_consts]=consts,map,acc) do
+  defp helix_rec_builder(last_value,i,[{row,column}|rest_fields],conds,primes,[this_sect_zeros|_rest_sects_zeros]=sects_zeros,zeros_already,cycle,size,[{const_index,const_value}|_rest_consts]=consts,map,acc) do
       
     value = rem(last_value,cycle) + 1 
-    #IO.puts("ITER (i = #{i}), {#{row},#{column}}, val: #{value}, SECT_ZERO: #{this_sect_zeros}, rest: #{rest_sects_zeros}")
       
+    
+    {next_non_zero_const_index,_} = 
+
+      if const_value === 0 do
+        Enum.find(consts,fn {_cnst_index,cnst_value} -> cnst_value != 0 end)
+      else
+        {const_index,0}
+      end
       
       next_value_is_possible =
         check_conditions({{row,column},value},conds,primes,size,cycle) and
-          this_sect_zeros - zeros_already < const_index - i
+          this_sect_zeros - zeros_already < next_non_zero_const_index - i
       zero_is_possible = 
         check_conditions({{row,column},0},conds,primes,size,cycle) and
           this_sect_zeros > zeros_already
-      #IO.puts("checking, next value: #{next_value_is_possible}, zero: #{zero_is_possible}")
     part_res_1 =
     if next_value_is_possible do
       this_prime = :array.get(value-1,primes)
@@ -218,6 +210,7 @@ defmodule Nhf1 do
     if zero_is_possible do
       new_conds = 
         update_conditions(conds,[{2*(row-1)+1,:add,1},{2*size+2*(column-1)+1,:add,1}])
+      
       helix_rec_builder(last_value,i+1,rest_fields,new_conds,primes,sects_zeros,zeros_already+1,cycle,size,consts,map,[0|acc])
     else
       []
@@ -226,16 +219,15 @@ defmodule Nhf1 do
     
   end
  
-  def helix_rec_builder(_last_value,_i,[],_conds,_primes,_sects_zeros,_zeros_already,_cycle,size,_consts,map,acc) do
-    #IO.puts("STOP (size = #{size}, i = #{i})")
+  defp helix_rec_builder(_last_value,_i,[],_conds,_primes,_sects_zeros,_zeros_already,_cycle,size,_consts,map,acc) do
     res = acc |> Enum.reverse()
     [result_announcer(res,size,map)]
     
   end 
 
-  #megoldás felépító lapos listából
+  # building solution from a flat list
   @spec result_announcer(res::[value()],size::size(),map::%{})::[[value()]]
-  def result_announcer(res,size,map) do
+  defp result_announcer(res,size,map) do
     for row <- 1..size do      
       for column <- 1..size do
         Enum.at(res,Map.get(map,{row,column})-1)
@@ -244,19 +236,19 @@ defmodule Nhf1 do
   end
   
   @spec field_list_and_map_builder(n::size(),depth::integer(),result::[field()]):: {:array.array(),%{}}
-  #épít egy tömböt a {row,column} értékekkel a tekeredő bejárás szerinti sorrendben
-  def field_list_and_map_builder(0,_depth,result) do
+  # builds an array with {row,column} values in the order of a spiral traversal
+  defp field_list_and_map_builder(0,_depth,result) do
     
     map = 
       Enum.with_index(result,1) 
-      # a lista koordináta elemiből csinálok egy {koord,index} listát. Pl.: [{1,1},{1,2},...] -> [{{1,1},0},{{1,2},1},...]
-      #1-estől kezdve
-      |> Enum.into(%{}) #map-et csinálok az előző listából
+      # convert the coordinate elements of the list into a {coord, index} list. Ex: [{1,1},{1,2},...] -> [{{1,1},0},{{1,2},1},...]
+      # starting from 1
+      |> Enum.into(%{}) # make a map from the previous list
     {result,map}
   end 
-  def field_list_and_map_builder(1,depth,result), do: field_list_and_map_builder(0,depth,result++[{depth,depth}])
+  defp field_list_and_map_builder(1,depth,result), do: field_list_and_map_builder(0,depth,result++[{depth,depth}])
 
-  def field_list_and_map_builder(n,depth,result) do
+  defp field_list_and_map_builder(n,depth,result) do
     top = for i <- 1..n do
       {depth,i+depth-1}
     end
@@ -281,13 +273,12 @@ defmodule Nhf1 do
   end
   
   
-  #készít egy 2*(n+n)-es arrayt (mert sokszor módosítom, és fontos az indexelésen elérés a gyorsaság miatt)
-  #ez tartalmazza, minden sorhoz, és minden oszlophoz 2 értéket: r, és f
-  #             r:= egy integer, amelynek prím osztóji (p1*p2*...*pk) megfelelnek az értékeknek amelyek az adott sorban/oszloban vannak
-  #             f:= egy integer, amennyi nullást helyeztünk már el az adott sorban/oszlopban
-  
+  # creates a 2*(n+n) array (because I modify it often, and index access is important for speed)
+  # this contains 2 values for every row and every column: r and f
+  #             r := an integer whose prime divisors (p1*p2*...*pk) correspond to the values present in the given row/column
+  #             f := an integer, the number of zeros already placed in the given row/column  
   @spec conditions_array_builder(n::size(),[field_value()],primes:: :array.array()):: :array.array()
-  def conditions_array_builder(n,constraints,primes) do
+  defp conditions_array_builder(n,constraints,primes) do
     empty_arr = :array.from_list(
       for x <- 0 .. (2*(n+n)-1) do
         if rem(x,2) == 0 do
@@ -316,7 +307,7 @@ defmodule Nhf1 do
   end
 
 
-  #frissíti a conditions tömb értékeit, a megkapott változtatásokkal (amik vagy összeadás :add, vagy szorzás :mul)
+  # updates the values of the conditions array with the received modifiers (which are either addition :add or multiplication :mul)
   @spec update_conditions(array:: :array.array(),[{integer(),atom(),integer()}]):: :array.array()
   defp update_conditions(array,modifiers) do
     Enum.reduce(modifiers,array,fn {index,op,modif},acc ->
@@ -329,35 +320,36 @@ defmodule Nhf1 do
     end)
   end
 
-  #lecsekkol egy konrét cella, konkért érték esetén a conditions tömböt
+  # checks the conditions array for a specific cell and specific value
   @spec check_conditions(field_value(),conditions:: :array.array(),primes:: :array.array(),size::size(),cycle::cycle())::boolean()
-  def check_conditions({{row,column},value},conds,primes,size,cycle) do
+  defp check_conditions({{row,column},value},conds,primes,size,cycle) do
       if value === 0 do
-        :array.get(2*(row-1)+1,conds) < size - cycle and # adott sorban még elfér egy nullás
-        :array.get(2*size + 2*(column-1)+1,conds) < size - cycle # az oszlopban is elfér nullás
+        :array.get(2*(row-1)+1,conds) < size - cycle and # a zero still fits in the given row
+        :array.get(2*size + 2*(column-1)+1,conds) < size - cycle # a zero still fits in the column
       else
-        rem(:array.get(2*(row-1),conds),:array.get(value-1,primes)) != 0 and  #adott sorban még nem szerepel value
-        rem(:array.get(2*size + 2*(column-1),conds),:array.get(value-1,primes)) != 0 #oszlopban sem
+        rem(:array.get(2*(row-1),conds),:array.get(value-1,primes)) != 0 and  # value is not yet in the given row
+        rem(:array.get(2*size + 2*(column-1),conds),:array.get(value-1,primes)) != 0 # nor in the column
+        
       end      
   end
   
 
-  #készít egy map-et, kulcsok 1,2,...,m, értékek különböző prímszámok (Eratoszthenész szitája)
+  # creates an array, keys 1,2,...,m, values are different prime numbers (Sieve of Eratosthenes)
   @spec prime_array_builder(m::cycle()):: :array.array()
-  def prime_array_builder(m) do
+  defp prime_array_builder(m) do
     
     limit = 
       if m <= 10 do
         30
       else 
-        trunc(m*:math.log(m)+10000)  #matematikaliag nem helyes de m pár ezres nagyságáig jó 
+        trunc(m*:math.log(m)+10000)  # mathematically incorrect but fine up to an m of a few thousand 
       end
     :array.from_list(Enum.take(Enum.reverse(sieve(Enum.to_list(2..limit),[])),m))
   end
 
-  #szita metódus
+  # sieve method
   defp sieve([],result), do: result
-  #az x mindig prím, mert minden prím x-nél kiveszem az összes többszörösét a hátralévő listából
+  # x is always prime, because for every prime x I remove all its multiples from the remaining list
   defp sieve([x|xs],result) do
     sieve(Enum.reject(xs, fn y -> rem(y, x) == 0 end), [x | result])
   end
@@ -368,4 +360,3 @@ defmodule Nhf1 do
   
 
 end
-
